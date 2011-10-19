@@ -9,41 +9,40 @@ import android.widget.Button;
 
 public class SquirrelRadio extends Activity implements OnClickListener {
 
-	Button start, stop;
+    Button start, stop;
 
-	@Override
-	public void onCreate(Bundle savedInstanceState) {
-		super.onCreate(savedInstanceState);
-		setContentView(R.layout.main);
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
 
-		start = (Button) findViewById(R.id.start_button);
-		stop = (Button) findViewById(R.id.stop_button);
+        start = (Button) findViewById(R.id.start_button);
+        stop = (Button) findViewById(R.id.stop_button);
 
-		start.setOnClickListener(this);
-		stop.setOnClickListener(this);
+        start.setOnClickListener(this);
+        stop.setOnClickListener(this);
 
-	}
+    }
 
-	public void onClick(View src) {
-		switch (src.getId()) {
-		case R.id.start_button:
-			startService(new Intent(this, RadioService.class));
-			break;
-		case R.id.stop_button:
-			stopService(new Intent(this, RadioService.class));
-			break;
-		}
-	}
+    public void onClick(View src) {
+        switch (src.getId()) {
+        case R.id.start_button:
+            startService(new Intent(this, RadioService.class));
+            break;
+        case R.id.stop_button:
+            stopService(new Intent(this, RadioService.class));
+            break;
+        }
+    }
 
-	@Override
-	protected void onResume() {
-		super.onResume();
-	}
+    @Override
+    protected void onResume() {
+        super.onResume();
+    }
 
-	@Override
-	protected void onStop() {
-		super.onStop();
-
-	}
+    @Override
+    protected void onStop() {
+        super.onStop();
+    }
 
 }
