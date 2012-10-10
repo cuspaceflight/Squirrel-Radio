@@ -1,6 +1,6 @@
 package uk.ac.cam.cusf.squirrelradio;
 
-import java.io.File;
+import java.io.FileDescriptor;
 import java.io.IOException;
 
 import android.app.Notification;
@@ -33,13 +33,14 @@ public class RadioService extends Service {
     private final static String THREAD_NAME = "SquirrelRadioThread";
 
     private final static int STREAM_TYPE = AudioManager.STREAM_MUSIC;
-    private final static int STREAM_VOL = 9;
+    
+    public final static String DESCENT_BROADCAST = "uk.ac.cam.cusf.intent.action.DESCENT";
 
     // Minimum delay between transmissions, in milliseconds
-    public final static int DELAY = 20000;
+    public static int DELAY = 10000;
 
     // Ratio of RTTY to SSTV transmissions (ie. TX_RATIO : 1)
-    public final static int TX_RATIO = 10;
+    public final static int TX_RATIO = 3;
 
     private Rtty rtty;
     private Sstv sstv;
@@ -48,12 +49,17 @@ public class RadioService extends Service {
     private LocationManager locationManager;
     private LocationListener locationListener;
     private BroadcastReceiver batteryListener;
+    private BroadcastReceiver descentListener;
 
     private Intent battery;
+    private boolean descent = false;
+    private boolean landed = false;
 
     private HandlerThread thread;
 
     private MediaPlayer mediaPlayer;
+    
+    private Context context;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -63,12 +69,15 @@ public class RadioService extends Service {
     @Override
     public void onCreate() {
 
-        rtty = new Rtty();
-        sstv = new Sstv();
+        context = this.getApplicationContext();
+        
+        rtty = new Rtty(context);
+        sstv = new Sstv(context);
 
         AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         audioManager.setStreamSolo(STREAM_TYPE, true);
-        audioManager.setStreamVolume(STREAM_TYPE, STREAM_VOL, 0);
+        int streamVol = audioManager.getStreamMaxVolume(STREAM_TYPE);
+        audioManager.setStreamVolume(STREAM_TYPE, streamVol, 0);
 
         initMediaPlayer();
 
@@ -108,6 +117,29 @@ public class RadioService extends Service {
         IntentFilter actionChanged = new IntentFilter();
         actionChanged.addAction(Intent.ACTION_BATTERY_CHANGED);
         registerReceiver(batteryListener, actionChanged);
+        
+        descentListener = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent.getAction().equals(DESCENT_BROADCAST)) {
+                    Log.i(TAG, "DESCENT_BROADCAST received!");
+                    Bundle extras = intent.getExtras();
+                    if (extras.getBoolean("descent", false)) {
+                        Log.i(TAG, "Descending");
+                        descent = true;
+                        DELAY = 500;
+                    } else if (extras.getBoolean("landed", false)) {
+                        Log.i(TAG, "Landed");
+                        landed = true;
+                        DELAY = 60000;
+                    }
+                }
+            }
+        };
+
+        actionChanged = new IntentFilter();
+        actionChanged.addAction(DESCENT_BROADCAST);
+        registerReceiver(descentListener, actionChanged);
 
         thread = new TxHandlerThread(THREAD_NAME, Process.THREAD_PRIORITY_AUDIO);
 
@@ -128,6 +160,8 @@ public class RadioService extends Service {
         } else {
             Log.i(TAG, "Radio thread is already alive");
         }
+        
+        RadioStatus.setRunning(true);
 
         return START_STICKY;
     }
@@ -148,7 +182,7 @@ public class RadioService extends Service {
 
         @Override
         public boolean handleMessage(Message msg) {
-            File wav;
+            AudioFile audio;
             int duration = -1;
 
             switch (msg.what) {
@@ -164,14 +198,15 @@ public class RadioService extends Service {
                             "getLastKnownLocation() returned null, using default Location object instead");
                     location = new Location(LocationManager.GPS_PROVIDER);
                 }
-
-                wav = rtty.createRtty(location, battery); // takes a while to
-                                                          // generate...
-                if (wav == null) {
+                
+                // This call blocks for a while
+                audio = rtty.createRtty(location, battery);
+                
+                if (audio == null) {
                     Log.i(TAG, "createRtty() returned null");
                 } else {
                     try {
-                        duration = transmit(wav);
+                        duration = transmit(audio);
                     } catch (Exception e) {
                         Log.e(TAG, "transmit() threw unknown Exception", e);
                         mediaPlayer = null;
@@ -183,14 +218,22 @@ public class RadioService extends Service {
 
             case SSTV:
 
+                if (descent) {
+                    Log.i(TAG, "Generate image & hopefully Tweet...");
+                    sstv.creator.generate();
+                    break;
+                }
+                
                 Log.i(TAG, "Preparing SSTV");
 
-                wav = sstv.generateImage(); // takes a while to generate...
-                if (wav == null) {
+                // This call blocks for quite some time
+                audio = sstv.generateImage();
+                
+                if (audio == null) {
                     Log.i(TAG, "generateImage() returned null");
                 } else {
                     try {
-                        duration = transmit(wav);
+                        duration = transmit(audio);
                     } catch (Exception e) {
                         Log.e(TAG, "transmit() threw unknown Exception", e);
                         mediaPlayer = null;
@@ -215,7 +258,14 @@ public class RadioService extends Service {
 
         private Message getNext() {
             txCount++;
-            if (txCount % (TX_RATIO + 1) == TX_RATIO) {
+            
+            Intent intent = new Intent();
+            intent.setAction("uk.ac.cam.cusf.intent.ALIVE");
+            context.sendBroadcast(intent);
+            
+            if (landed) {
+                return handler.obtainMessage(RTTY);
+            } else if (txCount % (TX_RATIO + 1) == TX_RATIO) {
                 return handler.obtainMessage(SSTV);
             } else {
                 return handler.obtainMessage(RTTY);
@@ -224,9 +274,11 @@ public class RadioService extends Service {
 
     }
 
-    private int transmit(final File wav) throws Exception {
+    private int transmit(final AudioFile audio) throws Exception {
 
-        if (wav == null) {
+        FileDescriptor fd = audio.getFileDescriptor(context);
+        
+        if (fd == null) {
             Log.e(TAG, "Null WAV File supplied to transmit()");
             return 0;
         }
@@ -242,12 +294,13 @@ public class RadioService extends Service {
             @Override
             public void onCompletion(MediaPlayer mp) {
                 mp.reset();
-                wav.delete();
+                // Delete audio file to save internal memory
+                audio.delete(context);
             }
         });
 
         try {
-            mediaPlayer.setDataSource(wav.getAbsolutePath());
+            mediaPlayer.setDataSource(fd);
             mediaPlayer.prepare();
             mediaPlayer.start();
         } catch (IllegalArgumentException e) {
@@ -264,7 +317,7 @@ public class RadioService extends Service {
             return 0;
         }
 
-        Log.i(TAG, "Transmitting " + wav.getName() + ", "
+        Log.i(TAG, "Transmitting " + audio.getFilename() + ", "
                 + mediaPlayer.getDuration() + "ms");
 
         return mediaPlayer.getDuration();
@@ -319,7 +372,10 @@ public class RadioService extends Service {
         stopMediaPlayer();
         locationManager.removeUpdates(locationListener);
         unregisterReceiver(batteryListener);
+        unregisterReceiver(descentListener);
         nManager.cancel(1);
+        
+        RadioStatus.setRunning(false);
     }
 
     private void showNotification() {

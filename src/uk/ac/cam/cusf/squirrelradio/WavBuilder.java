@@ -2,45 +2,41 @@ package uk.ac.cam.cusf.squirrelradio;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileFilter;
 import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
 
-import android.os.Environment;
+import android.content.Context;
 import android.util.Log;
 
 public class WavBuilder {
 
     public static final String TAG = "SquirrelRadio";
 
-    private final String DIRECTORY = "SquirrelAudio";
-    private final String FILENAME;
+    private final String filename;
 
     private boolean CLOSED = false;
     private boolean ERROR = false;
 
-    File file;
     BufferedOutputStream bufferedOutput;
 
-    public WavBuilder(int channels, int rate, int samples) {
+    private Context context;
+    private AudioFile audioFile;
+    
+    public WavBuilder(int channels, int rate, int samples, Context context) {
 
-        FILENAME = System.currentTimeMillis() + ".wav";
+        this.context = context;
+        
+        filename = System.currentTimeMillis() + ".wav";
+        double length = 1.0 * samples / rate;
+        audioFile = new AudioFile(filename, length);
+        
+        deleteAll(); // Delete any existing wav files in internal memory
 
         try {
-            File exportDir = new File(
-                    Environment.getExternalStorageDirectory(), DIRECTORY);
-            if (!exportDir.exists()) {
-                exportDir.mkdirs();
-            }
-
-            file = new File(Environment.getExternalStorageDirectory(),
-                    DIRECTORY + "/" + FILENAME);
-            if (file.exists()) {
-                file.delete();
-            }
 
             bufferedOutput = new BufferedOutputStream(
-                    new FileOutputStream(file));
+                      context.openFileOutput(filename, Context.MODE_PRIVATE));
 
             byte[] header = new byte[44];
             WavHeader.writeHeader(header, channels, rate, 2, samples);
@@ -76,19 +72,19 @@ public class WavBuilder {
         if (ERROR) {
             try {
                 // Try to delete the file
-                if (file != null)
-                    file.delete();
+                context.deleteFile(filename);
             } catch (Exception e) {
                 // Do nothing...
             }
         }
     }
 
-    public File getWavFile() {
-        File wavFile = null;
-        if (CLOSED && !ERROR)
-            wavFile = file;
-        return wavFile;
+    public AudioFile getAudioFile() {
+        if (CLOSED && !ERROR) {
+            return audioFile;
+        } else {
+            return null;
+        }
     }
 
     public boolean isError() {
@@ -97,6 +93,31 @@ public class WavBuilder {
 
     public void error() {
         ERROR = true;
+    }
+    
+    private void deleteAll() {
+        File dir = context.getFilesDir();
+        FileFilter filter = new FileFilter() {
+            @Override
+            public boolean accept(File pathname) {
+                String name = pathname.getAbsolutePath();
+                int pos = name.lastIndexOf('.');
+                if (pos == -1) {
+                    return false;
+                } else {
+                    String ext = name.substring(pos + 1);
+                    if (ext.equalsIgnoreCase("wav"))
+                        return true;
+                }
+
+                return false;
+            }
+        };
+        File[] files = dir.listFiles(filter);
+        for (File file : files) {
+            Log.i(TAG, "Deleting " + file.getAbsolutePath());
+            file.delete();
+        }
     }
 
 }

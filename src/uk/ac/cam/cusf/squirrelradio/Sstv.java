@@ -1,9 +1,9 @@
 package uk.ac.cam.cusf.squirrelradio;
 
 import java.io.BufferedOutputStream;
-import java.io.File;
 import java.io.IOException;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.util.Log;
@@ -31,14 +31,16 @@ public class Sstv {
 
     private double phase = 0;
 
-    BitmapCreator creator;
+    public BitmapCreator creator;
+    
+    private Context context;
 
-    public Sstv() {
-        super();
-        creator = new BitmapCreator();
+    public Sstv(Context context) {
+        this.context = context;
+        creator = new BitmapCreator(context);
     }
 
-    public File generateImage() {
+    public AudioFile generateImage() {
 
         Bitmap image = creator.generate(); // Returns a 320x256 Bitmap
 
@@ -54,7 +56,7 @@ public class Sstv {
 
         phase = 0;
 
-        WavBuilder wav = new WavBuilder(1, SAMPLE_RATE, imageLength() / 2);
+        WavBuilder wav = new WavBuilder(1, SAMPLE_RATE, imageLength() / 2, context);
         if (!wav.isError()) {
             try {
                 writeBitmap(image, wav);
@@ -67,7 +69,7 @@ public class Sstv {
         wav.close();
         image = null; // Free up memory associated with bitmap
 
-        return wav.getWavFile(); // Returns null is wav.isError() == true
+        return wav.getAudioFile(); // Returns null if wav.isError() == true
     }
 
     private void writeBitmap(Bitmap bitmap, WavBuilder wav) throws IOException {

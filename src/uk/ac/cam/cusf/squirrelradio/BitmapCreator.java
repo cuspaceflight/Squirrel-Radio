@@ -2,12 +2,20 @@ package uk.ac.cam.cusf.squirrelradio;
 
 import java.io.File;
 import java.io.FileFilter;
-import java.io.FileOutputStream;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.math.BigInteger;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Random;
 
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -21,14 +29,53 @@ import android.util.Log;
 public class BitmapCreator {
 
     public final static String TAG = "SquirrelRadio";
+    
+    private final static String CAMERA_PACKAGE = "uk.ac.cam.cusf.squirrelcamera";
+    private final static String FILENAME = "sstv.jpg";
 
-    private final String DIRECTORY = "SquirrelSSTV";
-
-    private String lastName = "";
-
+    private String hash;
+    
+    private Context context;
+    
+    public BitmapCreator(Context context) {
+        this.context = context;
+    }
+    
     private File lastPhoto() {
+        try {
+            Context ctx = context.createPackageContext(CAMERA_PACKAGE, 0);
+            try {
+                FileInputStream fis = ctx.openFileInput(FILENAME);
+                if (fis == null) return null;
+                String hash = md5(fis);
+                if (this.hash != null && this.hash.equals(hash)) {
+                    Log.i(TAG, "No new SSTV file to transmit");
+                    return null;
+                } else {
+                    this.hash = hash;
+                    File directory = ctx.getFilesDir();
+                    File photo = new File(directory, FILENAME);
+                    if (photo.exists()) {
+                        return photo;
+                    } else {
+                        return null;
+                    }
+                }
+            } catch (FileNotFoundException e) {
+                Log.e(TAG, "FileNotFoundException " + FILENAME, e);
+                return null;
+            }
+            
+        } catch (NameNotFoundException e) {
+            Log.e(TAG, "NameNotFoundException", e);
+            return null;
+        }
+        
+    }
+    
+    private File stockPhoto() {
         File directory = new File(Environment.getExternalStorageDirectory(),
-                "SquirrelCamera");
+                "stock");
         FileFilter filter = new FileFilter() {
             @Override
             public boolean accept(File pathname) {
@@ -54,26 +101,22 @@ public class BitmapCreator {
                         f1.lastModified());
             }
         });
-        return files[0];
-        /*
-         * Random random = new Random(); return
-         * files[random.nextInt(files.length)];
-         */
-    }
-
-    private boolean altitudeBit(double altitude, int i) {
-        int num = (int) (altitude / 100);
-        return ((num >> i) & 1) == 1;
+        
+        Random random = new Random();
+        return files[random.nextInt(files.length)];
+        
     }
 
     public Bitmap generate() {
 
-        File lastPhoto = lastPhoto();
-        if (lastPhoto == null || lastName.equals(lastPhoto.getName())) {
-            return null;
+        File photo = lastPhoto();
+        
+        if (photo == null) {
+            // Try a stock photo for demo purposes
+            photo = stockPhoto();
         }
-        // Don't need this for stock images
-        lastName = lastPhoto.getName();
+        
+        if (photo == null) return null;
 
         Bitmap bitmap = Bitmap.createBitmap(320, 256, Bitmap.Config.ARGB_8888);
 
@@ -98,22 +141,25 @@ public class BitmapCreator {
         // Altitude info
 
         try {
-            ExifInterface exif = new ExifInterface(lastPhoto.getAbsolutePath());
-            // double altitude = exif.getAltitude(0);
-            double altitude = exif.getAttributeDouble("GPSAltitude", 0);
-            // This doesn't work - need to work out own parsing for altitude
-            // (copy source from 2.3)
+            ExifInterface exif = new ExifInterface(photo.getAbsolutePath());
+            double altitude = exif.getAltitude(0);
 
-            for (int i = 0; i < 9; i++) {
-                if (altitudeBit(altitude, i)) {
-                    for (int x = 230 - i * 10; x < 240 - i * 10; x++) {
-                        for (int y = 12; y < 16; y++) {
-                            bitmap.setPixel(x, y, Color.BLACK);
-                        }
-                    }
-
+            double scale = (altitude / 50000);
+            if (scale > 1) scale = 1;
+            
+            for (int x = 120; x < 240; x = x + (int)((240 - 120) * 0.2)) {
+                for (int y = 12; y < 16; y++) {
+                    bitmap.setPixel(x, y, Color.BLACK);
+                    bitmap.setPixel(x + 1, y, Color.BLACK);
                 }
             }
+            
+            for (int x = 120; x < 120 + (240 - 120) * scale; x++) {
+                for (int y = 4; y < 12; y++) {
+                    bitmap.setPixel(x, y, Color.BLACK);
+                }
+            }
+            
         } catch (IOException e) {
             Log.e(TAG, "IOException in ExifInterface");
         }
@@ -123,39 +169,74 @@ public class BitmapCreator {
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inSampleSize = 4;
 
-        Bitmap s = BitmapFactory.decodeFile(lastPhoto.getAbsolutePath(),
+        Bitmap s = BitmapFactory.decodeFile(photo.getAbsolutePath(),
                 options);
-        if (s == null)
+        
+        if (s == null) {
+            Log.e(TAG, "decodeFile returned null");
             return null;
+        }
         Canvas canvas = new Canvas(bitmap);
 
         Matrix matrix = new Matrix();
         matrix.preScale(320f / s.getWidth(), 240f / s.getHeight());
         matrix.postTranslate(0, 16);
         canvas.drawBitmap(s, matrix, null);
-
-        saveBitmap(bitmap, lastPhoto.getName());
+        
+        saveBitmap(bitmap, "generated_" + photo.getName());
         return bitmap;
 
     }
 
     public void saveBitmap(Bitmap bitmap, String filename) {
-        File exportDir = new File(Environment.getExternalStorageDirectory(),
-                DIRECTORY);
-        if (!exportDir.exists()) {
-            exportDir.mkdirs();
-        }
-        File bitmapFile = new File(Environment.getExternalStorageDirectory(),
-                DIRECTORY + "/" + filename);
-        if (bitmapFile.exists())
-            return;
+        context.deleteFile(filename);
         try {
-            OutputStream output = new FileOutputStream(bitmapFile);
+            OutputStream output = context.openFileOutput(filename, 3);
             bitmap.compress(CompressFormat.JPEG, 85, output);
             output.close();
         } catch (IOException e) {
             Log.e(TAG, "IOException in saveBitmap", e);
         }
+
+        File directory = context.getFilesDir();
+        File sstv = new File(directory, filename);
+        
+        Intent intent = new Intent();
+        intent.setAction("uk.ac.cam.cusf.intent.Tweet");
+        intent.putExtra("message", "SSTV image");
+        intent.putExtra("path", sstv.getPath());
+        context.sendBroadcast(intent);
+        
+    }
+    
+    private String md5(FileInputStream fis) {
+        MessageDigest md;
+        try {
+            md = MessageDigest.getInstance("MD5");
+        } catch (NoSuchAlgorithmException e1) {
+            Log.e(TAG, "NoSuchAlgorithmException in md5()", e1);
+            return null;
+        }
+
+        byte[] buf = new byte[8192];
+        int len;
+        try {
+            while ((len = fis.read(buf)) != -1) {
+                md.update(buf, 0, len);
+            }
+            fis.close();
+        } catch (IOException e) {
+            Log.e(TAG, "IOException in md5()", e);
+            return null;
+        }
+
+        byte[] digest = md.digest();
+        
+        BigInteger bi = new BigInteger(1, digest);
+        String hex = String.format("%0" + (digest.length << 1) + "X", bi);
+        Log.i(TAG, "MD5: " + hex);
+        
+        return hex;
     }
 
 }

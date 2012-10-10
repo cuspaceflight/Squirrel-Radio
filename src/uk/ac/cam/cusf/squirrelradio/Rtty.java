@@ -1,12 +1,13 @@
 package uk.ac.cam.cusf.squirrelradio;
 
 import java.io.BufferedOutputStream;
-import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Formatter;
+import java.util.TimeZone;
 
+import android.content.Context;
 import android.content.Intent;
 import android.location.Location;
 import android.os.BatteryManager;
@@ -35,12 +36,14 @@ public class Rtty {
 
     private final byte[] mark;
     private final byte[] space;
-
-    private Encryptor encryptor = new Encryptor();
+    
+    private Context context;
 
     // Initialises the mark and space 16 bit sound arrays
-    public Rtty() {
-
+    public Rtty(Context context) {
+        
+        this.context = context;
+        
         int markFreq = CENTRE_FREQ + FREQ_SHIFT / 2;
         int spaceFreq = CENTRE_FREQ - FREQ_SHIFT / 2;
 
@@ -76,12 +79,12 @@ public class Rtty {
 
     // Takes string and returns RTTY audio sample, complete with start and stop
     // bits
-    private File generateWav(String text) {
+    private AudioFile generateWav(String text) {
 
         boolean[] bits = createBits(text);
 
         int numSamples = mark.length * (bits.length + LOCK_ON);
-        WavBuilder wav = new WavBuilder(1, SAMPLE_RATE, numSamples / 2);
+        WavBuilder wav = new WavBuilder(1, SAMPLE_RATE, numSamples / 2, context);
 
         BufferedOutputStream output = wav.getOutputStream();
 
@@ -105,7 +108,7 @@ public class Rtty {
 
         wav.close();
 
-        return wav.getWavFile();
+        return wav.getAudioFile();
     }
 
     // Takes string and returns RS232 (serial) bits
@@ -135,10 +138,11 @@ public class Rtty {
         return bits;
     }
 
-    public File createRtty(Location location, Intent battery) {
+    public AudioFile createRtty(Location location, Intent battery) {
 
         Date gpsDate = new Date(location.getTime());
         SimpleDateFormat dateFormat = new SimpleDateFormat("HH:mm:ss");
+        dateFormat.setTimeZone(TimeZone.getTimeZone("GMT"));
 
         long realtime = SystemClock.elapsedRealtime();
 
@@ -149,21 +153,15 @@ public class Rtty {
         msg += "," + String.format("%.6f", location.getLongitude());
         msg += "," + String.format("%.0f", location.getAltitude());
 
-        /*
-         * if (battery != null) { int level =
-         * battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1); int scale =
-         * battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1); int temperature
-         * = battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1); int
-         * health = battery.getIntExtra(BatteryManager.EXTRA_HEALTH,
-         * BatteryManager.BATTERY_HEALTH_UNKNOWN);
-         * 
-         * String secure = String.format("%.1f",(100.0*level)/scale); secure +=
-         * ","+String.valueOf(temperature); secure +=
-         * ","+String.valueOf(health);
-         * 
-         * encryptor.setKeyPosition(realtime); msg +=
-         * ","+encryptor.encrypt(secure); } else { msg += ","; }
-         */
+        if (battery != null) {
+            int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+            int temperature = battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1);
+            msg += "," + String.format("%.0f", (100.0 * level)/scale);
+            msg += "," + String.valueOf(temperature);
+        } else {
+            msg += ",,";
+        }
 
         msg += "*" + crc(msg);
         msg += "\r\n";
@@ -171,6 +169,13 @@ public class Rtty {
         msg = "$$" + msg;
 
         Log.i(TAG, msg);
+        
+        Intent intent = new Intent();
+        intent.setAction("uk.ac.cam.cusf.intent.Tweet");
+        intent.putExtra("message", msg);
+        intent.putExtra("latitude", location.getLatitude());
+        intent.putExtra("longitude", location.getLongitude());
+        context.sendBroadcast(intent);
 
         return generateWav(msg);
 
